@@ -1,0 +1,54 @@
+; audio_i2s.pio — I2S transmitter for TLV320DAC3100 on Fruit Jam
+; 16-bit stereo, MSB first
+;
+; OUT pin 0:       DIN  (GPIO 24)
+; Side-set pin 0:  BCLK (GPIO 26)
+; Side-set pin 1:  WS   (GPIO 27)
+;
+; Autopull threshold = 32, shift left
+; PIO clock = sample_rate * 64 (32 BCLK cycles per frame, 2 PIO cycles per BCLK)
+
+.program audio_i2s
+.side_set 2
+
+;                          /--- WS (LRCK)
+;                          |/-- BCLK
+.wrap_target
+    set x, 14       side 0b01  ; preload 15-1 counter; BCLK high, WS low
+left_data:
+    out pins, 1     side 0b00  ; shift out data bit; BCLK low (data changes)
+    jmp x-- left_data side 0b01 ; BCLK high (DAC samples); loop 15 times
+    out pins, 1     side 0b10  ; 16th bit out; BCLK low, WS goes high (right channel)
+    set x, 14       side 0b11  ; preload counter; BCLK high, WS high
+right_data:
+    out pins, 1     side 0b10  ; shift out data bit; BCLK low
+    jmp x-- right_data side 0b11 ; BCLK high; loop 15 times
+    out pins, 1     side 0b00  ; 16th bit out; BCLK low, WS goes low (left channel)
+.wrap
+
+
+% c-sdk {
+static inline void audio_i2s_program_init(PIO pio, uint sm, uint offset,
+                                           uint din_pin, uint bclk_pin) {
+    // DIN is the OUT pin
+    pio_gpio_init(pio, din_pin);
+    pio_sm_set_consecutive_pindirs(pio, sm, din_pin, 1, true);
+
+    // BCLK and WS are side-set pins (2 consecutive pins starting at bclk_pin)
+    pio_gpio_init(pio, bclk_pin);      // BCLK
+    pio_gpio_init(pio, bclk_pin + 1);  // WS
+    pio_sm_set_consecutive_pindirs(pio, sm, bclk_pin, 2, true);
+
+    pio_sm_config c = audio_i2s_program_get_default_config(offset);
+    sm_config_set_out_pins(&c, din_pin, 1);
+    sm_config_set_sideset_pins(&c, bclk_pin);
+
+    // Autopull at 32 bits, shift left (MSB first)
+    sm_config_set_out_shift(&c, false, true, 32);
+
+    // Join FIFOs for TX (8-deep)
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+
+    pio_sm_init(pio, sm, offset, &c);
+}
+%}
