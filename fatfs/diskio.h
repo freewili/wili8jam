@@ -1,5 +1,5 @@
 /*-----------------------------------------------------------------------/
-/  Low level disk interface modlue include file   (C)ChaN, 2019          /
+/  Low level disk interface module include file   (C)ChaN, 2019          /
 /-----------------------------------------------------------------------*/
 
 #ifndef _DISKIO_DEFINED
@@ -40,7 +40,7 @@ DRESULT disk_ioctl (BYTE pdrv, BYTE cmd, void* buff);
 #define STA_PROTECT		0x04	/* Write protected */
 
 
-/* Command code for disk_ioctrl fucntion */
+/* Command code for disk_ioctl function */
 
 /* Generic command (Used by FatFs) */
 #define CTRL_SYNC			0	/* Complete pending write process (needed at FF_FS_READONLY == 0) */
@@ -61,7 +61,7 @@ DRESULT disk_ioctl (BYTE pdrv, BYTE cmd, void* buff);
 #define MMC_GET_CID			12	/* Get CID */
 #define MMC_GET_OCR			13	/* Get OCR */
 #define MMC_GET_SDSTAT		14	/* Get SD status */
-#define ISDIO_READ			55	/* Read data form SD iSDIO register */
+#define ISDIO_READ			55	/* Read data from SD iSDIO register */
 #define ISDIO_WRITE			56	/* Write data to SD iSDIO register */
 #define ISDIO_MRITE			57	/* Masked write data to SD iSDIO register */
 
