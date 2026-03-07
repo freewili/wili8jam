@@ -16,11 +16,13 @@
 static volatile DSTATUS sd_status = STA_NOINIT;
 
 // SRAM bounce buffer — ensures SD SPI never touches PSRAM directly
-static uint8_t bounce_buf[512];
+#define SD_SECTOR_SIZE 512
+static uint8_t bounce_buf[SD_SECTOR_SIZE];
 
-// Check if an address is in PSRAM (XIP region for external memory)
+// RP2350 PSRAM starts at 0x11000000 (XIP region for external memory)
+#define PSRAM_BASE 0x11000000
 static inline int is_psram(const void *p) {
-    return ((uintptr_t)p >= 0x11000000);
+    return ((uintptr_t)p >= PSRAM_BASE);
 }
 
 DSTATUS disk_initialize(BYTE pdrv) {
@@ -54,7 +56,7 @@ DRESULT disk_read(BYTE pdrv, BYTE *buff, LBA_t sector, UINT count) {
     for (UINT i = 0; i < count; i++) {
         if (sd_read_blocks(bounce_buf, (uint32_t)(sector + i), 1) != SD_OK)
             return RES_ERROR;
-        memcpy(buff + i * 512, bounce_buf, 512);
+        memcpy(buff + i * SD_SECTOR_SIZE, bounce_buf, SD_SECTOR_SIZE);
     }
     return RES_OK;
 }
@@ -72,7 +74,7 @@ DRESULT disk_write(BYTE pdrv, const BYTE *buff, LBA_t sector, UINT count) {
 
     // Buffer is in PSRAM — write one sector at a time via SRAM bounce buffer
     for (UINT i = 0; i < count; i++) {
-        memcpy(bounce_buf, buff + i * 512, 512);
+        memcpy(bounce_buf, buff + i * SD_SECTOR_SIZE, SD_SECTOR_SIZE);
         if (sd_write_blocks(bounce_buf, (uint32_t)(sector + i), 1) != SD_OK)
             return RES_ERROR;
     }
@@ -95,7 +97,7 @@ DRESULT disk_ioctl(BYTE pdrv, BYTE cmd, void *buff) {
     }
 
     case GET_SECTOR_SIZE:
-        *(WORD *)buff = 512;
+        *(WORD *)buff = SD_SECTOR_SIZE;
         return RES_OK;
 
     case GET_BLOCK_SIZE:
