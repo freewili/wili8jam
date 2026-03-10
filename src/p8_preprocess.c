@@ -414,11 +414,24 @@ static bool try_short_form(buf_t *out, const char *line, size_t len,
         return true;
     }
 
-    /* Reject if followed by expression-continuation operators (or, and) —
-       that means the outer parens are part of a multi-line condition, not short-form */
+    /* Reject if followed by expression-continuation operators —
+       that means the outer parens are part of a larger condition, not short-form */
     if (match_keyword(line, after_paren, len, "or") ||
         match_keyword(line, after_paren, len, "and"))
         return false;
+
+    /* Reject if followed by comparison/arithmetic operators: the parens are
+       a sub-expression, e.g. if (x or 0) < 5 then */
+    if (after_paren < len) {
+        char nc = line[after_paren];
+        if (nc == '<' || nc == '>' || nc == '=' || nc == '~' || nc == '!' ||
+            nc == '+' || nc == '*' || nc == '/' || nc == '%' || nc == '^' ||
+            (nc == '.' && after_paren + 1 < len && line[after_paren + 1] == '.'))
+            return false;
+        /* Minus: reject only if it looks like a binary operator (preceded by close paren) */
+        if (nc == '-' && after_paren + 1 < len && line[after_paren + 1] != '-')
+            return false;
+    }
 
     /* It's short-form. There must be something after the paren (the statement). */
     if (after_paren >= len) return false;
@@ -582,20 +595,45 @@ static size_t find_compound_op(const char *line, size_t len,
         if (c == '/' && i + 1 < len && line[i+1] == '/')
             break;
 
-        /* Check for ..= first (3-char operator) */
+        /* Check for 3-char compound ops: ..=  ^^=  >>>=  <<=  >>= */
         if (c == '.' && i + 2 < len && line[i+1] == '.' && line[i+2] == '=') {
             *op_str = "..";
             *op_total_len = 3;
             return i;
         }
+        if (c == '^' && i + 2 < len && line[i+1] == '^' && line[i+2] == '=') {
+            *op_str = "~";   /* PICO-8 ^^ XOR → Lua 5.4 ~ */
+            *op_total_len = 3;
+            return i;
+        }
+        /* 4-char: >>>= (logical right shift assignment) */
+        if (c == '>' && i + 3 < len && line[i+1] == '>' && line[i+2] == '>' && line[i+3] == '=') {
+            *op_str = ">>";  /* PICO-8 >>> → Lua 5.4 >> */
+            *op_total_len = 4;
+            return i;
+        }
+        /* 3-char: <<= >>= */
+        if (c == '<' && i + 2 < len && line[i+1] == '<' && line[i+2] == '=') {
+            *op_str = "<<";
+            *op_total_len = 3;
+            return i;
+        }
+        if (c == '>' && i + 2 < len && line[i+1] == '>' && line[i+2] == '=') {
+            *op_str = ">>";
+            *op_total_len = 3;
+            return i;
+        }
 
-        /* Check single-char compound ops: += -= *= /= %= */
+        /* Check single-char compound ops: += -= *= /= %= \= */
         if (i + 1 < len && line[i+1] == '=') {
-            if (c == '+' || c == '-' || c == '*' || c == '/' || c == '%') {
-                *op_str = (c == '+') ? "+" :
-                          (c == '-') ? "-" :
-                          (c == '*') ? "*" :
-                          (c == '/') ? "/" : "%";
+            if (c == '+' || c == '-' || c == '*' || c == '/' || c == '%' || c == '\\') {
+                if (c == '\\')
+                    *op_str = "//";  /* PICO-8 \ → Lua 5.4 // */
+                else
+                    *op_str = (c == '+') ? "+" :
+                              (c == '-') ? "-" :
+                              (c == '*') ? "*" :
+                              (c == '/') ? "/" : "%";
                 *op_total_len = 2;
                 return i;
             }
@@ -657,6 +695,8 @@ static size_t find_rhs_end(const char *line, size_t start, size_t len) {
                 if (j < len && is_ident_char(line[j])) {
                     /* Scan past identifier */
                     while (j < len && is_ident_char(line[j])) j++;
+                    /* Skip whitespace between identifier and operator */
+                    while (j < len && (line[j] == ' ' || line[j] == '\t')) j++;
                     /* Check for = (not ==, not <=, not >=, not ~=, not !=) */
                     if (j < len && line[j] == '=' && (j + 1 >= len || line[j+1] != '=')) {
                         break; /* RHS ends here at the whitespace */
@@ -701,96 +741,126 @@ static size_t find_comment_start(const char *line, size_t len) {
     return len;
 }
 
-/* --- Main line content transform --- */
+/*
+ * Check whether the character at line[pos] is preceded (ignoring whitespace)
+ * by a "value" token — identifier, digit, close paren/bracket, or close quote.
+ * Used to disambiguate PICO-8 % (peek2 vs modulo).
+ */
+static bool is_value_before(const char *line, size_t pos) {
+    while (pos > 0 && (line[pos-1] == ' ' || line[pos-1] == '\t')) pos--;
+    if (pos == 0) return false;
+    char prev = line[pos - 1];
+    if (prev == ')' || prev == ']' || prev == '"' || prev == '\'') return true;
+    if (prev >= '0' && prev <= '9') return true;
+    if (!is_ident_char(prev)) return false;
+    /* Previous char is ident — check if it's a keyword (keywords aren't values) */
+    size_t end = pos;
+    while (pos > 0 && is_ident_char(line[pos-1])) pos--;
+    size_t wlen = end - pos;
+    const char *w = line + pos;
+    if ((wlen == 6 && memcmp(w, "return", 6) == 0) ||
+        (wlen == 3 && memcmp(w, "and", 3) == 0) ||
+        (wlen == 2 && memcmp(w, "or", 2) == 0) ||
+        (wlen == 3 && memcmp(w, "not", 3) == 0) ||
+        (wlen == 4 && memcmp(w, "then", 4) == 0) ||
+        (wlen == 2 && memcmp(w, "do", 2) == 0) ||
+        (wlen == 4 && memcmp(w, "else", 4) == 0) ||
+        (wlen == 6 && memcmp(w, "elseif", 6) == 0) ||
+        (wlen == 5 && memcmp(w, "local", 5) == 0) ||
+        (wlen == 2 && memcmp(w, "in", 2) == 0) ||
+        (wlen == 5 && memcmp(w, "until", 5) == 0) ||
+        (wlen == 6 && memcmp(w, "repeat", 6) == 0) ||
+        (wlen == 8 && memcmp(w, "function", 8) == 0))
+        return false;
+    return true;
+}
 
-static bool transform_line_content(buf_t *out, const char *line, size_t len,
-                                   bool *in_long, int *long_level) {
-    /* First: check for ?expr at start of line → print(expr) */
-    {
-        size_t i = skip_ws(line, 0, len);
-        if (i < len && line[i] == '?') {
-            buf_append(out, line, i); /* preserve leading whitespace */
-            buf_puts(out, "print(");
-            size_t expr_start = i + 1;
-            /* skip optional whitespace after ? */
-            if (expr_start < len && line[expr_start] == ' ') expr_start++;
-            /* Find trailing comment and exclude it from the print() arg */
-            size_t comment_pos = find_comment_start(line + expr_start, len - expr_start);
-            size_t expr_len = comment_pos;
-            /* Trim trailing whitespace from expression */
-            while (expr_len > 0 && (line[expr_start + expr_len - 1] == ' ' ||
-                                     line[expr_start + expr_len - 1] == '\t'))
-                expr_len--;
-            buf_append(out, line + expr_start, expr_len);
-            buf_puts(out, ")");
-            /* Append the comment (transformed) if present */
-            if (comment_pos < len - expr_start) {
-                buf_putc(out, ' ');
-                size_t cpos = expr_start + comment_pos;
-                if (line[cpos] == '/' && cpos + 1 < len && line[cpos+1] == '/') {
-                    buf_puts(out, "--");
-                    buf_append(out, line + cpos + 2, len - cpos - 2);
-                } else {
-                    buf_append(out, line + cpos, len - cpos);
-                }
-            }
-            return true;
-        }
+/*
+ * Find where a PICO-8 peek operand ends (@expr, %expr, $expr).
+ * Operand: parenthesized expression, identifier (with . chains), or number.
+ */
+static size_t peek_operand_end(const char *line, size_t start, size_t len) {
+    size_t i = start;
+    if (i >= len) return start;
+
+    /* Parenthesized expression */
+    if (line[i] == '(') {
+        size_t close = find_close_paren(line, i, len);
+        return (close < len) ? close + 1 : len;
     }
 
-    /* Check for short-form if/while */
-    if (try_short_form(out, line, len, "if", "then", "end", in_long, long_level))
-        return true;
-    if (try_short_form(out, line, len, "while", "do", "end", in_long, long_level))
-        return true;
-
-    /* Check for compound assignment (line-level, before char-by-char) */
-    {
-        const char *op_str;
-        size_t op_total_len;
-        size_t op_pos = find_compound_op(line, len, &op_str, &op_total_len);
-        if (op_pos < len) {
-            size_t lhs_start = find_lhs_start(line, op_pos);
-            if (lhs_start < op_pos) {
-                /* LHS: line[lhs_start..op_pos), trimmed of trailing whitespace */
-                size_t lhs_end = op_pos;
-                while (lhs_end > lhs_start && (line[lhs_end-1] == ' ' || line[lhs_end-1] == '\t'))
-                    lhs_end--;
-
-                /* RHS: from after operator to boundary (keyword, new assignment, comment) */
-                size_t rhs_start = op_pos + op_total_len;
-                while (rhs_start < len && (line[rhs_start] == ' ' || line[rhs_start] == '\t'))
-                    rhs_start++;
-                size_t rhs_end = find_rhs_end(line, rhs_start, len);
-
-                /* Emit: [prefix] LHS = LHS op (RHS) */
-                buf_append(out, line, lhs_start);           /* prefix before LHS */
-                buf_append(out, line + lhs_start, lhs_end - lhs_start);  /* LHS */
-                buf_puts(out, " = ");
-                buf_append(out, line + lhs_start, lhs_end - lhs_start);  /* LHS */
-                buf_putc(out, ' ');
-                buf_puts(out, op_str);
-                buf_puts(out, " (");
-                buf_append(out, line + rhs_start, rhs_end - rhs_start);  /* RHS */
-                buf_puts(out, ")");
-
-                /* Process remainder of line (may contain more statements, keywords) */
-                if (rhs_end < len) {
-                    /* Skip leading whitespace — we already broke at it */
-                    size_t rem = rhs_end;
-                    while (rem < len && (line[rem] == ' ' || line[rem] == '\t')) rem++;
-                    if (rem < len) {
-                        buf_putc(out, ' ');
-                        return transform_line_content(out, line + rem, len - rem,
-                                                      in_long, long_level);
-                    }
-                }
-                return true;
-            }
-        }
+    /* Hex number: 0x... */
+    if (line[i] == '0' && i + 1 < len && (line[i+1] == 'x' || line[i+1] == 'X')) {
+        i += 2;
+        while (i < len && ((line[i] >= '0' && line[i] <= '9') ||
+                           (line[i] >= 'a' && line[i] <= 'f') ||
+                           (line[i] >= 'A' && line[i] <= 'F') ||
+                           line[i] == '.')) i++;
+        return i;
     }
 
-    /* Character-by-character transform for the rest */
+    /* Decimal number */
+    if (line[i] >= '0' && line[i] <= '9') {
+        while (i < len && ((line[i] >= '0' && line[i] <= '9') || line[i] == '.')) i++;
+        return i;
+    }
+
+    /* Identifier (with . member access chains) */
+    if (is_ident_char(line[i])) {
+        while (i < len && is_ident_char(line[i])) i++;
+        while (i < len && line[i] == '.' && i + 1 < len && is_ident_char(line[i+1])) {
+            i++;
+            while (i < len && is_ident_char(line[i])) i++;
+        }
+        return i;
+    }
+
+    return start;
+}
+
+/* Forward declaration — transform_chars calls itself recursively for peek operands */
+static bool transform_chars(buf_t *out, const char *line, size_t len,
+                            bool *in_long, int *long_level);
+
+/*
+ * Emit a PICO-8 peek call: peek(operand), peek2(operand), or peek4(operand).
+ * Advances *pi past the operand.
+ */
+static void emit_peek_call(buf_t *out, const char *func,
+                           const char *line, size_t *pi, size_t len,
+                           bool *in_long, int *long_level) {
+    size_t i = *pi;
+    buf_puts(out, func);
+    buf_putc(out, '(');
+
+    if (i < len && line[i] == '(') {
+        /* Parenthesized: strip outer parens, transform content */
+        size_t close = find_close_paren(line, i, len);
+        if (close < len) {
+            transform_chars(out, line + i + 1, close - i - 1, in_long, long_level);
+            *pi = close + 1;
+        } else {
+            transform_chars(out, line + i, len - i, in_long, long_level);
+            *pi = len;
+        }
+    } else {
+        /* Identifier or number — find extent and transform */
+        size_t end = peek_operand_end(line, i, len);
+        transform_chars(out, line + i, end - i, in_long, long_level);
+        *pi = end;
+    }
+
+    buf_putc(out, ')');
+}
+
+/* --- Character-by-character transform helper ---
+ * Handles: string escapes, long strings, comments (-- and //),
+ * != → ~=, >>> → >>, ^^ → ~, \ → //, @/%/$ peek operators,
+ * P8SCII, binary literals.
+ * Returns true if a long string/comment was opened (sets in_long/long_level).
+ */
+static bool transform_chars(buf_t *out, const char *line, size_t len,
+                            bool *in_long, int *long_level) {
     size_t i = 0;
     while (i < len) {
         char c = line[i];
@@ -976,10 +1046,148 @@ static bool transform_line_content(buf_t *out, const char *line, size_t len,
             continue;
         }
 
+        /* PICO-8 >>> logical right shift → >> (Lua 5.4) */
+        if (c == '>' && i + 2 < len && line[i+1] == '>' && line[i+2] == '>') {
+            buf_puts(out, ">>");
+            i += 3;
+            continue;
+        }
+
+        /* PICO-8 ^^ XOR → ~ (Lua 5.4 bitwise XOR) */
+        if (c == '^' && i + 1 < len && line[i+1] == '^') {
+            buf_putc(out, '~');
+            i += 2;
+            continue;
+        }
+
+        /* PICO-8 \ integer division → // (Lua 5.4) */
+        if (c == '\\') {
+            buf_puts(out, "//");
+            i++;
+            continue;
+        }
+
+        /* PICO-8 @expr → peek(expr) */
+        if (c == '@') {
+            i++;
+            emit_peek_call(out, "peek", line, &i, len, in_long, long_level);
+            continue;
+        }
+
+        /* PICO-8 $expr → peek4(expr) */
+        if (c == '$') {
+            i++;
+            emit_peek_call(out, "peek4", line, &i, len, in_long, long_level);
+            continue;
+        }
+
+        /* PICO-8 %expr → peek2(expr) when unary; modulo when binary */
+        if (c == '%' && !is_value_before(line, i)) {
+            i++;
+            emit_peek_call(out, "peek2", line, &i, len, in_long, long_level);
+            continue;
+        }
+
         /* Default: copy character */
         buf_putc(out, c);
         i++;
     }
+
+    return false;
+}
+
+/* --- Main line content transform --- */
+
+static bool transform_line_content(buf_t *out, const char *line, size_t len,
+                                   bool *in_long, int *long_level) {
+    /* First: check for ?expr at start of line → print(expr) */
+    {
+        size_t i = skip_ws(line, 0, len);
+        if (i < len && line[i] == '?') {
+            buf_append(out, line, i); /* preserve leading whitespace */
+            buf_puts(out, "print(");
+            size_t expr_start = i + 1;
+            /* skip optional whitespace after ? */
+            if (expr_start < len && line[expr_start] == ' ') expr_start++;
+            /* Find trailing comment and exclude it from the print() arg */
+            size_t comment_pos = find_comment_start(line + expr_start, len - expr_start);
+            size_t expr_len = comment_pos;
+            /* Trim trailing whitespace from expression */
+            while (expr_len > 0 && (line[expr_start + expr_len - 1] == ' ' ||
+                                     line[expr_start + expr_len - 1] == '\t'))
+                expr_len--;
+            buf_append(out, line + expr_start, expr_len);
+            buf_puts(out, ")");
+            /* Append the comment (transformed) if present */
+            if (comment_pos < len - expr_start) {
+                buf_putc(out, ' ');
+                size_t cpos = expr_start + comment_pos;
+                if (line[cpos] == '/' && cpos + 1 < len && line[cpos+1] == '/') {
+                    buf_puts(out, "--");
+                    buf_append(out, line + cpos + 2, len - cpos - 2);
+                } else {
+                    buf_append(out, line + cpos, len - cpos);
+                }
+            }
+            return true;
+        }
+    }
+
+    /* Check for short-form if/while */
+    if (try_short_form(out, line, len, "if", "then", "end", in_long, long_level))
+        return true;
+    if (try_short_form(out, line, len, "while", "do", "end", in_long, long_level))
+        return true;
+
+    /* Check for compound assignment (line-level, before char-by-char) */
+    {
+        const char *op_str;
+        size_t op_total_len;
+        size_t op_pos = find_compound_op(line, len, &op_str, &op_total_len);
+        if (op_pos < len) {
+            size_t lhs_start = find_lhs_start(line, op_pos);
+            if (lhs_start < op_pos) {
+                /* LHS: line[lhs_start..op_pos), trimmed of trailing whitespace */
+                size_t lhs_end = op_pos;
+                while (lhs_end > lhs_start && (line[lhs_end-1] == ' ' || line[lhs_end-1] == '\t'))
+                    lhs_end--;
+
+                /* RHS: from after operator to boundary (keyword, new assignment, comment) */
+                size_t rhs_start = op_pos + op_total_len;
+                while (rhs_start < len && (line[rhs_start] == ' ' || line[rhs_start] == '\t'))
+                    rhs_start++;
+                size_t rhs_end = find_rhs_end(line, rhs_start, len);
+
+                /* Emit: [prefix] LHS = LHS op (RHS) */
+                transform_chars(out, line, lhs_start, in_long, long_level); /* prefix before LHS */
+                buf_append(out, line + lhs_start, lhs_end - lhs_start);  /* LHS */
+                buf_puts(out, " = ");
+                buf_append(out, line + lhs_start, lhs_end - lhs_start);  /* LHS */
+                buf_putc(out, ' ');
+                buf_puts(out, op_str);
+                buf_puts(out, " (");
+                transform_chars(out, line + rhs_start, rhs_end - rhs_start, in_long, long_level); /* RHS */
+                buf_puts(out, ")");
+
+                /* Process remainder of line (may contain more statements, keywords) */
+                if (rhs_end < len) {
+                    /* Skip leading whitespace — we already broke at it */
+                    size_t rem = rhs_end;
+                    while (rem < len && (line[rem] == ' ' || line[rem] == '\t')) rem++;
+                    if (rem < len) {
+                        buf_putc(out, ' ');
+                        return transform_line_content(out, line + rem, len - rem,
+                                                      in_long, long_level);
+                    }
+                }
+                return true;
+            }
+        }
+    }
+
+    /* Character-by-character transform for the rest */
+    if (transform_chars(out, line, len, in_long, long_level))
+        return true; /* long string/comment opened */
 
     return true;
 }

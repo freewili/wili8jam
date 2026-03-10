@@ -981,27 +981,37 @@ void luaV_finishOp (lua_State *L) {
 /*
 ** Bitwise operations with constant operand.
 */
+/*
+** PICO-8 16.16 fixed-point helpers.
+** All bitwise/shift ops work on the raw 32-bit fixed-point representation.
+*/
+#define p8_to_fx(n)    ((lua_Integer)((n) * 65536.0))
+#define p8_from_fx(fx) ((lua_Number)(fx) / 65536.0)
+
 #define op_bitwiseK(L,op) {  \
   StkId ra = RA(i); \
   TValue *v1 = vRB(i);  \
   TValue *v2 = KC(i);  \
-  lua_Integer i1;  \
-  lua_Integer i2 = ivalue(v2);  \
-  if (tointegerns(v1, &i1)) {  \
-    pc++; setivalue(s2v(ra), op(i1, i2));  \
+  lua_Number n1;  \
+  if (tonumberns(v1, n1)) {  \
+    lua_Integer a = p8_to_fx(n1);  \
+    lua_Integer b = p8_to_fx((lua_Number)ivalue(v2));  \
+    pc++; setfltvalue(s2v(ra), p8_from_fx(op(a, b)));  \
   }}
 
 
 /*
 ** Bitwise operations with register operands.
+** PICO-8: operate on 16.16 fixed-point representation.
 */
 #define op_bitwise(L,op) {  \
   StkId ra = RA(i); \
   TValue *v1 = vRB(i);  \
   TValue *v2 = vRC(i);  \
-  lua_Integer i1; lua_Integer i2;  \
-  if (tointegerns(v1, &i1) && tointegerns(v2, &i2)) {  \
-    pc++; setivalue(s2v(ra), op(i1, i2));  \
+  lua_Number n1, n2;  \
+  if (tonumberns(v1, n1) && tonumberns(v2, n2)) {  \
+    lua_Integer a = p8_to_fx(n1), b = p8_to_fx(n2);  \
+    pc++; setfltvalue(s2v(ra), p8_from_fx(op(a, b)));  \
   }}
 
 
@@ -1438,22 +1448,37 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
         vmbreak;
       }
       vmcase(OP_SHRI) {
+        /* PICO-8: rb >> ic (logical right shift on fixed-point) */
         StkId ra = RA(i);
         TValue *rb = vRB(i);
         int ic = GETARG_sC(i);
-        lua_Integer ib;
-        if (tointegerns(rb, &ib)) {
-          pc++; setivalue(s2v(ra), luaV_shiftl(ib, -ic));
+        lua_Number nb;
+        if (tonumberns(rb, nb)) {
+          lua_Integer fx = p8_to_fx(nb);
+          if (ic >= 0) {
+            if (ic < NBITS) fx = l_castU2S(l_castS2U(fx) >> ic); else fx = 0;
+          } else {
+            if (-ic < NBITS) fx <<= (-ic); else fx = 0;
+          }
+          pc++; setfltvalue(s2v(ra), p8_from_fx(fx));
         }
         vmbreak;
       }
       vmcase(OP_SHLI) {
+        /* PICO-8: ic << rb (left shift on fixed-point, ic is value, rb is count) */
         StkId ra = RA(i);
         TValue *rb = vRB(i);
         int ic = GETARG_sC(i);
-        lua_Integer ib;
-        if (tointegerns(rb, &ib)) {
-          pc++; setivalue(s2v(ra), luaV_shiftl(ic, ib));
+        lua_Number nb;
+        if (tonumberns(rb, nb)) {
+          lua_Integer fx = p8_to_fx((lua_Number)ic);
+          int n = (int)nb;
+          if (n >= 0) {
+            if (n < NBITS) fx <<= n; else fx = 0;
+          } else {
+            if (-n < NBITS) fx = l_castU2S(l_castS2U(fx) >> (-n)); else fx = 0;
+          }
+          pc++; setfltvalue(s2v(ra), p8_from_fx(fx));
         }
         vmbreak;
       }
@@ -1500,11 +1525,39 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
         vmbreak;
       }
       vmcase(OP_SHR) {
-        op_bitwise(L, luaV_shiftr);
+        /* PICO-8: v1 >> v2 (logical right shift on fixed-point) */
+        StkId ra = RA(i);
+        TValue *v1 = vRB(i);
+        TValue *v2 = vRC(i);
+        lua_Number n1, n2;
+        if (tonumberns(v1, n1) && tonumberns(v2, n2)) {
+          lua_Integer fx = p8_to_fx(n1);
+          int n = (int)n2;
+          if (n >= 0) {
+            if (n < NBITS) fx = l_castU2S(l_castS2U(fx) >> n); else fx = 0;
+          } else {
+            if (-n < NBITS) fx <<= (-n); else fx = 0;
+          }
+          pc++; setfltvalue(s2v(ra), p8_from_fx(fx));
+        }
         vmbreak;
       }
       vmcase(OP_SHL) {
-        op_bitwise(L, luaV_shiftl);
+        /* PICO-8: v1 << v2 (left shift on fixed-point) */
+        StkId ra = RA(i);
+        TValue *v1 = vRB(i);
+        TValue *v2 = vRC(i);
+        lua_Number n1, n2;
+        if (tonumberns(v1, n1) && tonumberns(v2, n2)) {
+          lua_Integer fx = p8_to_fx(n1);
+          int n = (int)n2;
+          if (n >= 0) {
+            if (n < NBITS) fx <<= n; else fx = 0;
+          } else {
+            if (-n < NBITS) fx = l_castU2S(l_castS2U(fx) >> (-n)); else fx = 0;
+          }
+          pc++; setfltvalue(s2v(ra), p8_from_fx(fx));
+        }
         vmbreak;
       }
       vmcase(OP_MMBIN) {
@@ -1553,11 +1606,13 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
         vmbreak;
       }
       vmcase(OP_BNOT) {
+        /* PICO-8: ~x (bitwise NOT on fixed-point) */
         StkId ra = RA(i);
         TValue *rb = vRB(i);
-        lua_Integer ib;
-        if (tointegerns(rb, &ib)) {
-          setivalue(s2v(ra), intop(^, ~l_castS2U(0), ib));
+        lua_Number nb;
+        if (tonumberns(rb, nb)) {
+          lua_Integer fx = p8_to_fx(nb);
+          setfltvalue(s2v(ra), p8_from_fx(~fx));
         }
         else
           Protect(luaT_trybinTM(L, rb, rb, ra, TM_BNOT));

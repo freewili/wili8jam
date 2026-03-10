@@ -358,10 +358,27 @@ static int tostringbuff (TValue *obj, char *buff) {
   if (ttisinteger(obj))
     len = lua_integer2str(buff, MAXNUMBER2STR, ivalue(obj));
   else {
-    len = lua_number2str(buff, MAXNUMBER2STR, fltvalue(obj));
-    if (buff[strspn(buff, "-0123456789")] == '\0') {  /* looks like an int? */
-      buff[len++] = lua_getlocaledecpoint();
-      buff[len++] = '0';  /* adds '.0' to result */
+    /*
+    ** PICO-8: no int/float distinction — integer-valued floats display
+    ** without a decimal point, fractional values show up to 4 digits.
+    */
+    lua_Number n = fltvalue(obj);
+    lua_Number intpart;
+    if (l_mathop(modf)(n, &intpart) == 0.0 &&
+        n >= (lua_Number)LUA_MININTEGER && n <= (lua_Number)LUA_MAXINTEGER) {
+      len = lua_integer2str(buff, MAXNUMBER2STR, (lua_Integer)n);
+    } else {
+      len = l_sprintf(buff, MAXNUMBER2STR, "%.4f", (double)n);
+      /* strip trailing zeros after decimal point */
+      char *dot = buff;
+      while (*dot && *dot != '.') dot++;
+      if (*dot == '.') {
+        char *end = buff + len - 1;
+        while (end > dot && *end == '0') end--;
+        if (end == dot) end--;  /* remove dot too if no fractional digits */
+        len = (int)(end - buff + 1);
+        buff[len] = '\0';
+      }
     }
   }
   return len;

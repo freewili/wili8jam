@@ -41,8 +41,10 @@ typedef enum BinOpr {
 } BinOpr;
 
 
-/* true if operation is foldable (that is, it is arithmetic or bitwise) */
-#define foldbinop(op)	((op) <= OPR_SHR)
+/* true if operation is foldable (arithmetic only, not bitwise/shift).
+** PICO-8: bitwise/shift ops use fixed-point semantics in the VM that
+** differ from standard integer ops used by the constant folder. */
+#define foldbinop(op)	((op) <= OPR_IDIV)
 
 
 #define luaK_codeABC(fs,o,a,b,c)	luaK_codeABCk(fs,o,a,b,c,0)

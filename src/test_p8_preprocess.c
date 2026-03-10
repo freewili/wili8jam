@@ -314,6 +314,95 @@ int main(void) {
          "x = \"\\^(hello\"",
          "x = \"\\^(hello\"\n");
 
+    /* --- != in prefix of compound assignment (celeste2.p8 bug) --- */
+
+    /* The core bug: != in prefix before += was not converted to ~= */
+    test("neq-in-compound-prefix",
+         "if level_index != 8 then frames += 1 end",
+         "if level_index ~= 8 then frames = frames + (1) end\n");
+
+    /* Binary literal in RHS of compound assignment */
+    test("binary-in-compound-rhs",
+         "a += 0b1010",
+         "a = a + (0xa)\n");
+
+    /* P8-style comment in remainder after compound assignment */
+    test("p8comment-after-compound",
+         "x += 1 // comment",
+         "x = x + (1) -- comment\n");
+
+    /* No prefix, just plain compound — still works */
+    test("compound-no-prefix",
+         "y -= 1",
+         "y = y - (1)\n");
+
+    /* RHS should stop at spaced assignment: "seconds += 1 frames = 0" */
+    test("compound-rhs-spaced-assign",
+         "if frames == 30 then seconds += 1 frames = 0 end",
+         "if frames == 30 then seconds = seconds + (1) frames = 0 end\n");
+
+    /* --- PICO-8 operator conversions --- */
+
+    /* >>> logical right shift → >> */
+    test("lshr-operator",
+         "x = a >>> b",
+         "x = a >> b\n");
+
+    /* ^^ XOR → ~ */
+    test("xor-operator",
+         "x = a ^^ b",
+         "x = a ~ b\n");
+
+    /* \ integer division → // */
+    test("intdiv-operator",
+         "y += x\\w",
+         "y = y + (x//w)\n");
+
+    /* @expr → peek(expr) */
+    test("peek-ident",
+         "x = @addr",
+         "x = peek(addr)\n");
+
+    /* @(expr) → peek(expr) */
+    test("peek-paren",
+         "x = @(addr + 1)",
+         "x = peek(addr + 1)\n");
+
+    /* @0x5f28 → peek(0x5f28) */
+    test("peek-hex",
+         "x = @0x5f28",
+         "x = peek(0x5f28)\n");
+
+    /* %expr → peek2(expr) when unary */
+    test("peek2-ident",
+         "x = %src",
+         "x = peek2(src)\n");
+
+    /* % as modulo when binary */
+    test("modulo-binary",
+         "x = a % b",
+         "x = a % b\n");
+
+    /* $expr → peek4(expr) */
+    test("peek4-ident",
+         "x = $addr",
+         "x = peek4(addr)\n");
+
+    /* Combined: cache += %src >>> 16 */
+    test("compound-peek2-lshr",
+         "cache+=%src>>>16",
+         "cache = cache + (peek2(src)>>16)\n");
+
+    /* \= compound assignment */
+    test("intdiv-assign",
+         "x \\= 2",
+         "x = x // (2)\n");
+
+    /* ^^= compound assignment */
+    test("xor-assign",
+         "x ^^= 0xff",
+         "x = x ~ (0xff)\n");
+
     printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
     return tests_passed == tests_run ? 0 : 1;
 }

@@ -141,14 +141,17 @@
 
 #if LUA_32BITS		/* { */
 /*
-** 32-bit integers and 'float'
+** 32-bit integers and 'double'
+** PICO-8 16.16 fixed-point needs 32 bits of precision; float's 24-bit
+** mantissa silently drops lower bits between bitwise operations.
+** double (52-bit mantissa) stores all 32 bits exactly.
 */
 #if LUAI_IS32INT  /* use 'int' if big enough */
 #define LUA_INT_TYPE	LUA_INT_INT
 #else  /* otherwise use 'long' */
 #define LUA_INT_TYPE	LUA_INT_LONG
 #endif
-#define LUA_FLOAT_TYPE	LUA_FLOAT_FLOAT
+#define LUA_FLOAT_TYPE	LUA_FLOAT_DOUBLE
 
 #elif LUA_C89_NUMBERS	/* }{ */
 /*
@@ -806,9 +809,9 @@
 */
 #include <math.h>
 
-static inline float luai_p8_sanitize(float r) {
-    if (r != r) return 0.0f;          /* NaN → 0 */
-    if (isinf(r)) return (r > 0) ? 32767.99f : -32767.99f;
+static inline LUA_NUMBER luai_p8_sanitize(LUA_NUMBER r) {
+    if (r != r) return 0.0;           /* NaN → 0 */
+    if (isinf(r)) return (r > 0) ? 32767.99 : -32767.99;
     return r;
 }
 

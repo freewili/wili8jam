@@ -20,7 +20,7 @@
 #include "usb_crc.h"
 
 enum {
-  TRANSACTION_MAX_RETRY = 3, // Number of times to retry a failed transaction
+  TRANSACTION_MAX_RETRY = 10, // Number of times to retry a failed transaction (was 3)
 };
 
 static alarm_pool_t *_alarm_pool = NULL;

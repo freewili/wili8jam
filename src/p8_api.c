@@ -232,6 +232,13 @@ static int p8_cursor(lua_State *L) {
 static int p8_camera(lua_State *L) {
     p8_camera_x = (int)luaL_optnumber(L, 1, 0);
     p8_camera_y = (int)luaL_optnumber(L, 2, 0);
+    /* Sync to memory-mapped draw state so peek2(0x5f28/0x5f2a) works */
+    int16_t cx = (int16_t)p8_camera_x;
+    int16_t cy = (int16_t)p8_camera_y;
+    p8_mem[0x5f28] = (uint8_t)(cx & 0xFF);
+    p8_mem[0x5f29] = (uint8_t)((cx >> 8) & 0xFF);
+    p8_mem[0x5f2a] = (uint8_t)(cy & 0xFF);
+    p8_mem[0x5f2b] = (uint8_t)((cy >> 8) & 0xFF);
     return 0;
 }
 
@@ -728,7 +735,7 @@ static int p8_rnd(lua_State *L) {
         return 1;
     }
     float x = lua_isnoneornil(L, 1) ? 1.0f : (float)luaL_checknumber(L, 1);
-    float r = (float)(p8_rng_next() & 0xFFFF) / 65536.0f;
+    float r = (float)(p8_rng_next() & 0xFFFF) / 65536.0;
     lua_pushnumber(L, r * x);
     return 1;
 }
@@ -1373,65 +1380,80 @@ static int p8_yield(lua_State *L) {
 // --- Bitwise operations ---
 // PICO-8 bitwise ops work on the full 32-bit integer representation
 
+/* PICO-8 16.16 fixed-point conversion helpers */
+#define P8_TO_FX(n)    ((int32_t)((n) * 65536.0))
+#define P8_FROM_FX(fx) ((lua_Number)(fx) / 65536.0)
+
 static int p8_band(lua_State *L) {
-    int a = (int)luaL_checknumber(L, 1);
-    int b = (int)luaL_checknumber(L, 2);
-    lua_pushnumber(L, (lua_Number)(a & b));
+    int32_t a = P8_TO_FX(luaL_checknumber(L, 1));
+    int32_t b = P8_TO_FX(luaL_checknumber(L, 2));
+    lua_pushnumber(L, P8_FROM_FX(a & b));
     return 1;
 }
 
 static int p8_bor(lua_State *L) {
-    int a = (int)luaL_checknumber(L, 1);
-    int b = (int)luaL_checknumber(L, 2);
-    lua_pushnumber(L, (lua_Number)(a | b));
+    int32_t a = P8_TO_FX(luaL_checknumber(L, 1));
+    int32_t b = P8_TO_FX(luaL_checknumber(L, 2));
+    lua_pushnumber(L, P8_FROM_FX(a | b));
     return 1;
 }
 
 static int p8_bxor(lua_State *L) {
-    int a = (int)luaL_checknumber(L, 1);
-    int b = (int)luaL_checknumber(L, 2);
-    lua_pushnumber(L, (lua_Number)(a ^ b));
+    int32_t a = P8_TO_FX(luaL_checknumber(L, 1));
+    int32_t b = P8_TO_FX(luaL_checknumber(L, 2));
+    lua_pushnumber(L, P8_FROM_FX(a ^ b));
     return 1;
 }
 
 static int p8_bnot(lua_State *L) {
-    int a = (int)luaL_checknumber(L, 1);
-    lua_pushnumber(L, (lua_Number)(~a));
+    int32_t a = P8_TO_FX(luaL_checknumber(L, 1));
+    lua_pushnumber(L, P8_FROM_FX(~a));
     return 1;
 }
 
 static int p8_shl(lua_State *L) {
-    int x = (int)luaL_checknumber(L, 1);
+    int32_t fx = P8_TO_FX(luaL_checknumber(L, 1));
     int n = (int)luaL_checknumber(L, 2);
-    lua_pushnumber(L, (lua_Number)(x << n));
+    if (n >= 32 || n <= -32) fx = 0;
+    else if (n >= 0) fx <<= n;
+    else fx = (int32_t)((uint32_t)fx >> (-n));
+    lua_pushnumber(L, P8_FROM_FX(fx));
     return 1;
 }
 
 static int p8_shr(lua_State *L) {
-    int x = (int)luaL_checknumber(L, 1);
+    int32_t fx = P8_TO_FX(luaL_checknumber(L, 1));
     int n = (int)luaL_checknumber(L, 2);
-    lua_pushnumber(L, (lua_Number)(x >> n)); // arithmetic shift (signed)
+    if (n >= 32 || n <= -32) fx = (fx < 0) ? -1 : 0;
+    else if (n >= 0) fx >>= n;  /* arithmetic (signed) right shift */
+    else fx <<= (-n);
+    lua_pushnumber(L, P8_FROM_FX(fx));
     return 1;
 }
 
 static int p8_lshr(lua_State *L) {
-    unsigned int x = (unsigned int)(int)luaL_checknumber(L, 1);
+    uint32_t fx = (uint32_t)P8_TO_FX(luaL_checknumber(L, 1));
     int n = (int)luaL_checknumber(L, 2);
-    lua_pushnumber(L, (lua_Number)(int)(x >> n)); // logical shift
+    if (n >= 32 || n <= -32) fx = 0;
+    else if (n >= 0) fx >>= n;  /* logical (unsigned) right shift */
+    else fx <<= (-n);
+    lua_pushnumber(L, P8_FROM_FX((int32_t)fx));
     return 1;
 }
 
 static int p8_rotl(lua_State *L) {
-    uint32_t x = (uint32_t)(int)luaL_checknumber(L, 1);
+    uint32_t fx = (uint32_t)P8_TO_FX(luaL_checknumber(L, 1));
     int n = (int)luaL_checknumber(L, 2) & 31;
-    lua_pushnumber(L, (lua_Number)(int)((x << n) | (x >> (32 - n))));
+    fx = (fx << n) | (fx >> (32 - n));
+    lua_pushnumber(L, P8_FROM_FX((int32_t)fx));
     return 1;
 }
 
 static int p8_rotr(lua_State *L) {
-    uint32_t x = (uint32_t)(int)luaL_checknumber(L, 1);
+    uint32_t fx = (uint32_t)P8_TO_FX(luaL_checknumber(L, 1));
     int n = (int)luaL_checknumber(L, 2) & 31;
-    lua_pushnumber(L, (lua_Number)(int)((x >> n) | (x << (32 - n))));
+    fx = (fx >> n) | (fx << (32 - n));
+    lua_pushnumber(L, P8_FROM_FX((int32_t)fx));
     return 1;
 }
 
@@ -1598,9 +1620,11 @@ static int p8_peek2(lua_State *L) {
     for (int i = 0; i < n; i++) {
         int a = addr + i * 2;
         if (a < 0 || a + 1 >= P8_MEM_SIZE) {
-            lua_pushinteger(L, 0);
+            lua_pushnumber(L, 0);
         } else {
-            lua_pushinteger(L, p8_mem[a] | (p8_mem[a+1] << 8));
+            /* Return as signed 16-bit to match PICO-8 fixed-point range */
+            int16_t val = (int16_t)(uint16_t)(p8_mem[a] | (p8_mem[a+1] << 8));
+            lua_pushnumber(L, (lua_Number)val);
         }
     }
     return n;
@@ -1608,10 +1632,15 @@ static int p8_peek2(lua_State *L) {
 
 static int p8_poke2(lua_State *L) {
     int addr = (int)luaL_checknumber(L, 1);
-    int val = (int)luaL_checknumber(L, 2);
-    if (addr >= 0 && addr + 1 < P8_MEM_SIZE) {
-        p8_mem[addr] = val & 0xFF;
-        p8_mem[addr+1] = (val >> 8) & 0xFF;
+    int nargs = lua_gettop(L);
+    for (int i = 2; i <= nargs; i++) {
+        int a = addr + (i - 2) * 2;
+        if (a >= 0 && a + 1 < P8_MEM_SIZE) {
+            int16_t val = (int16_t)(int)luaL_checknumber(L, i);
+            uint16_t uval = (uint16_t)val;
+            p8_mem[a] = uval & 0xFF;
+            p8_mem[a+1] = (uval >> 8) & 0xFF;
+        }
     }
     return 0;
 }
@@ -1622,10 +1651,11 @@ static int p8_peek4(lua_State *L) {
     for (int i = 0; i < n; i++) {
         int a = addr + i * 4;
         if (a < 0 || a + 3 >= P8_MEM_SIZE) {
-            lua_pushinteger(L, 0);
+            lua_pushnumber(L, 0);
         } else {
-            uint32_t v = p8_mem[a] | (p8_mem[a+1]<<8) | (p8_mem[a+2]<<16) | (p8_mem[a+3]<<24);
-            lua_pushinteger(L, (lua_Integer)(int32_t)v);
+            /* Read raw 32-bit and convert from 16.16 fixed-point to float */
+            int32_t v = (int32_t)(p8_mem[a] | (p8_mem[a+1]<<8) | (p8_mem[a+2]<<16) | (p8_mem[a+3]<<24));
+            lua_pushnumber(L, (lua_Number)v / 65536.0);
         }
     }
     return n;
@@ -1633,12 +1663,17 @@ static int p8_peek4(lua_State *L) {
 
 static int p8_poke4(lua_State *L) {
     int addr = (int)luaL_checknumber(L, 1);
-    int32_t val = (int32_t)luaL_checknumber(L, 2);
-    if (addr >= 0 && addr + 3 < P8_MEM_SIZE) {
-        p8_mem[addr]   = val & 0xFF;
-        p8_mem[addr+1] = (val >> 8) & 0xFF;
-        p8_mem[addr+2] = (val >> 16) & 0xFF;
-        p8_mem[addr+3] = (val >> 24) & 0xFF;
+    int nargs = lua_gettop(L);
+    for (int i = 2; i <= nargs; i++) {
+        int a = addr + (i - 2) * 4;
+        if (a >= 0 && a + 3 < P8_MEM_SIZE) {
+            /* Convert from float to 16.16 fixed-point raw 32-bit */
+            int32_t val = (int32_t)(luaL_checknumber(L, i) * 65536.0);
+            p8_mem[a]   = val & 0xFF;
+            p8_mem[a+1] = (val >> 8) & 0xFF;
+            p8_mem[a+2] = (val >> 16) & 0xFF;
+            p8_mem[a+3] = (val >> 24) & 0xFF;
+        }
     }
     return 0;
 }
@@ -1759,6 +1794,9 @@ void p8_reset_draw_state(void) {
     p8_cursor_y = 0;
     p8_camera_x = 0;
     p8_camera_y = 0;
+    /* Clear memory-mapped draw state for camera */
+    p8_mem[0x5f28] = 0; p8_mem[0x5f29] = 0;
+    p8_mem[0x5f2a] = 0; p8_mem[0x5f2b] = 0;
     p8_clip_x = 0;
     p8_clip_y = 0;
     p8_clip_w = 128;
