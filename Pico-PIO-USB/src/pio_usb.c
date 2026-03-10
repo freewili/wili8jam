@@ -147,7 +147,7 @@ static inline __force_inline bool pio_usb_bus_wait_for_rx_start(const pio_port_t
   // is less than a full microsecond. For example, a wait of 2 could actually be 1.1 microseconds.
   // We will use 3 us (24 bit time) for Full speed and 12us (18 bit time) for Low speed.
   uint32_t start = get_time_us_32();
-  uint32_t timeout = pp->low_speed ? 18 : 8;
+  uint32_t timeout = pp->low_speed ? 12 : 3;
   while (get_time_us_32() - start <= timeout) {
     if ((pp->pio_usb_rx->irq & IRQ_RX_START_MASK) != 0) {
       return true;

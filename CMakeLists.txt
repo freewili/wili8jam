@@ -91,6 +91,9 @@ add_executable(wili8jam
     src/p8_png.c
     src/p8_console.c
     src/p8_editor.c
+    # TinyUSB host stack — must be compiled in the executable (not fwUSBHost lib)
+    # to avoid duplicate symbols with the device stack from pico_stdio_usb
+    ${FWUSBHOST_TINYUSB_HOST_SOURCES}
 )
 
 # Generate PIO header for I2S audio

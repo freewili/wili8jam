@@ -22,7 +22,10 @@ extern int tusb_debug_buffered_printf(const char *fmt, ...);
 #define CFG_TUSB_DEBUG_PRINTF   tusb_debug_buffered_printf
 
 /* ---- Device side: identical to SDK's pico_stdio_usb/include/tusb_config.h ---- */
+/* Only needed when pico_stdio_usb is present (i.e., app uses USB CDC serial).
+ * The host library alone does not require this section. */
 
+#if __has_include("pico/stdio_usb.h")
 #include "pico/stdio_usb.h"
 
 #if !defined(LIB_TINYUSB_HOST) && !defined(LIB_TINYUSB_DEVICE)
@@ -48,6 +51,7 @@ extern int tusb_debug_buffered_printf(const char *fmt, ...);
 #define CFG_TUD_VENDOR_TX_BUFSIZE  (256)
 #endif
 #endif
+#endif /* __has_include pico/stdio_usb.h */
 
 /* ---- Host side: PIO-USB on port 1 ---- */
 
