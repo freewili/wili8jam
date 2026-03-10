@@ -17,6 +17,13 @@
 #define CONTROLLER_MAX_AXES    6
 #define CONTROLLER_MAX_BUTTONS 16
 
+// Sony USB Vendor/Product IDs
+#define SONY_VID              0x054C
+#define SONY_PID_DUALSENSE    0x0CE6  // DualSense (PS5)
+#define SONY_PID_DUALSENSE_E  0x0DF2  // DualSense Edge (PS5)
+#define SONY_PID_DUALSHOCK4   0x05C4  // DualShock 4 v1 (PS4)
+#define SONY_PID_DUALSHOCK4_V2 0x09CC // DualShock 4 v2 (PS4)
+
 // Callback type for raw controller reports (matches GenericReportCallback)
 typedef void (*ControllerReportCallback)(uint8_t dev_addr, uint8_t instance, uint8_t const *report, uint16_t len);
 
@@ -34,6 +41,8 @@ struct ControllerInstance {
     uint8_t   dev_addr = 0;
     uint8_t   instance = 0;
     uint8_t   report_count = 0;
+    uint16_t  vid = 0;
+    uint16_t  pid = 0;
     tuh_hid_report_info_t report_info[4];
     ControllerState prev_state = {};
 };
@@ -51,6 +60,8 @@ private:
 
     int findInstance(uint8_t dev_addr, uint8_t instance) const;
     void processReport(int slot, uint8_t const *report, uint16_t len);
+    bool isSonyController(int slot) const;
+    void processSonyReport(int slot, uint8_t const *report, uint16_t len);
 
 public:
     fwUSBHostHIDController();

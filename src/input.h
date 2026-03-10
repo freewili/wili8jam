@@ -46,6 +46,10 @@ void input_mouse_update(int32_t dx, int32_t dy, int32_t wheel, uint8_t buttons);
 // player: 0 or 1 (maps to PICO-8 player index)
 void input_gamepad_report(const uint8_t *report, uint16_t len, int player);
 
+// DualSense/DualShock report (Sony controllers via HID)
+// Raw report from controller callback; pid used to select byte offsets
+void input_dualsense_report(const uint8_t *report, uint16_t len, int player, uint16_t pid);
+
 // XInput gamepad state (d-pad bitmask + left stick, already normalized)
 // wButtons uses XINPUT_GAMEPAD_* defines, stickLX/LY are signed 16-bit
 void input_xinput_update(uint16_t wButtons, int16_t stickLX, int16_t stickLY, int player);

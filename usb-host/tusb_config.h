@@ -59,7 +59,7 @@ extern int tusb_debug_buffered_printf(const char *fmt, ...);
 
 #define CFG_TUD_ENDPOINT0_SIZE 64
 
-#define CFG_TUH_ENUMERATION_BUFSIZE 256
+#define CFG_TUH_ENUMERATION_BUFSIZE 512
 #define CFG_TUH_HUB                 1
 #define CFG_TUH_CDC                 2
 #define CFG_TUH_CDC_FTDI            0

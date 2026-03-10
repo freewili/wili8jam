@@ -772,12 +772,19 @@ int main() {
     });
 
     // Register controller callback — player assigned by mount order
+    // Sony controllers (DualSense/DualShock) use a different report format
     obUSBHost.m_obHID.getController().setReportCallback(
         [](uint8_t dev_addr, uint8_t instance, uint8_t const *report, uint16_t len) {
             auto &ctrl = obUSBHost.m_obHID.getController();
             int player = ctrl.getPlayerForDevice(dev_addr, instance);
             if (player > 1) player = 1; // PICO-8 supports 2 players max
-            input_gamepad_report(report, len, player);
+            // Check VID to route Sony controllers to dedicated parser
+            uint16_t vid = 0, pid = 0;
+            tuh_vid_pid_get(dev_addr, &vid, &pid);
+            if (vid == SONY_VID)
+                input_dualsense_report(report, len, player, pid);
+            else
+                input_gamepad_report(report, len, player);
         });
 
     // NOTE: Generic HID devices are NOT routed to input_gamepad_report.

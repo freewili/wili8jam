@@ -289,6 +289,76 @@ void input_gamepad_report(const uint8_t *report, uint16_t len, int player) {
     if (face_buttons & 0x02) key_set(key_state, vk[5]); else key_clear(key_state, vk[5]);
 }
 
+// --- DualSense / DualShock ---
+
+#define DS_STICK_DEADZONE 64  // dead zone around center (128 +/- 64)
+
+// Sony PID defines (must match fwUSBHostHIDController.h)
+#define DS_PID_DUALSENSE    0x0CE6
+#define DS_PID_DUALSENSE_E  0x0DF2
+
+void input_dualsense_report(const uint8_t *report, uint16_t len, int player, uint16_t pid) {
+    if (player < 0 || player > 1) return;
+
+    // Skip report ID if present
+    const uint8_t *data = report;
+    uint16_t data_len = len;
+    if (data_len > 0 && data[0] == 0x01) {
+        data++;
+        data_len--;
+    }
+
+    // DualSense (PS5):  [LX LY RX RY L2trg R2trg counter hat+face shoulder ...]
+    //                     0  1  2  3   4     5     6       7        8
+    // DualShock4 (PS4): [LX LY RX RY hat+face shoulder PS+TP L2trg R2trg ...]
+    //                     0  1  2  3  4        5        6     7     8
+    bool is_dualsense = (pid == DS_PID_DUALSENSE || pid == DS_PID_DUALSENSE_E);
+    uint8_t btn_off = is_dualsense ? 7 : 4;
+    uint8_t shldr_off = is_dualsense ? 8 : 5;
+
+    if (data_len < (uint16_t)(shldr_off + 1)) return;
+
+    const uint8_t *vk = gamepad_vkeys[player];
+
+    uint8_t lx = data[0];
+    uint8_t ly = data[1];
+    uint8_t hat_face = data[btn_off];
+    uint8_t shoulder = data[shldr_off];
+
+    // D-pad from hat switch (low nibble)
+    uint8_t dpad = hat_face & 0x0F;
+    bool up = false, down = false, left = false, right = false;
+    if (dpad <= 7) {
+        // 0=N, 1=NE, 2=E, 3=SE, 4=S, 5=SW, 6=W, 7=NW
+        if (dpad == 0 || dpad == 1 || dpad == 7) up = true;
+        if (dpad == 2 || dpad == 1 || dpad == 3) right = true;
+        if (dpad == 4 || dpad == 3 || dpad == 5) down = true;
+        if (dpad == 6 || dpad == 5 || dpad == 7) left = true;
+    }
+
+    // Left stick as additional d-pad (dead zone)
+    if (lx < (128 - DS_STICK_DEADZONE)) left = true;
+    if (lx > (128 + DS_STICK_DEADZONE)) right = true;
+    if (ly < (128 - DS_STICK_DEADZONE)) up = true;
+    if (ly > (128 + DS_STICK_DEADZONE)) down = true;
+
+    if (left)  key_set(key_state, vk[0]);  else key_clear(key_state, vk[0]);
+    if (right) key_set(key_state, vk[1]);  else key_clear(key_state, vk[1]);
+    if (up)    key_set(key_state, vk[2]);  else key_clear(key_state, vk[2]);
+    if (down)  key_set(key_state, vk[3]);  else key_clear(key_state, vk[3]);
+
+    // Face buttons (high nibble): Square(0) Cross(1) Circle(2) Triangle(3)
+    // Cross → O (btn4), Circle → X (btn5)
+    uint8_t face = hat_face >> 4;
+    if (face & 0x02) key_set(key_state, vk[4]); else key_clear(key_state, vk[4]); // Cross
+    if (face & 0x04) key_set(key_state, vk[5]); else key_clear(key_state, vk[5]); // Circle
+
+    // Options (bit 5 of shoulder byte) → Menu (btn6, P1 only)
+    if (vk[6]) {
+        if (shoulder & 0x20) key_set(key_state, vk[6]); else key_clear(key_state, vk[6]);
+    }
+}
+
 // XInput defines (must match xinput_host.h)
 #define XINPUT_GAMEPAD_DPAD_UP    0x0001
 #define XINPUT_GAMEPAD_DPAD_DOWN  0x0002
