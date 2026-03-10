@@ -7,7 +7,7 @@
 #include <stdio.h>
 #include "tusb.h"
 #include "tusb_config.h"
-#include "xinput_host.h"
+#include "tusb_xinput/xinput_host.h"
 
 struct XInputInstance {
     bool      bMounted = false;

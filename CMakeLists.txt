@@ -103,7 +103,7 @@ add_executable(wili8jam
     usb-host/fwUSBHostCDC.cpp
     usb-host/fwUSBHostMSC.cpp
     usb-host/fwUSBHostXInput.cpp
-    tusb_xinput/xinput_host.c
+    usb-host/tusb_xinput/xinput_host.c
     # TinyUSB host stack (no native HCD — PIO-USB only)
     ${TINYUSB_PATH}/src/host/usbh.c
     ${TINYUSB_PATH}/src/host/hub.c
@@ -123,7 +123,7 @@ target_include_directories(wili8jam PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/usb-host
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/tusb_xinput
+    ${CMAKE_CURRENT_SOURCE_DIR}/usb-host/tusb_xinput
     ${LUA_SRC_DIR}
     ${TINYUSB_PATH}/src
 )
