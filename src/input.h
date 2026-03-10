@@ -42,9 +42,13 @@ typedef void (*input_mouse_poll_fn)(void);
 void input_set_mouse_poll(input_mouse_poll_fn fn);
 void input_mouse_update(int32_t dx, int32_t dy, int32_t wheel, uint8_t buttons);
 
-// Gamepad state (updated from USB HID generic reports)
-// buttons bitmask matches common layout: bit0=A/South, bit1=B/East, etc.
-void input_gamepad_report(const uint8_t *report, uint16_t len);
+// Gamepad state (updated from USB HID controller/generic reports)
+// player: 0 or 1 (maps to PICO-8 player index)
+void input_gamepad_report(const uint8_t *report, uint16_t len, int player);
+
+// XInput gamepad state (d-pad bitmask + left stick, already normalized)
+// wButtons uses XINPUT_GAMEPAD_* defines, stickLX/LY are signed 16-bit
+void input_xinput_update(uint16_t wButtons, int16_t stickLX, int16_t stickLY, int player);
 int input_mouse_x(void);
 int input_mouse_y(void);
 uint8_t input_mouse_buttons(void);

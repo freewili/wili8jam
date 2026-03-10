@@ -36,7 +36,14 @@ void fwUSBHost::task() {
 extern "C" {
 
 void tuh_mount_cb(uint8_t dev_addr) {
-    (void)dev_addr;
+    tusb_desc_device_t desc;
+    if (tuh_descriptor_get_device_sync(dev_addr, &desc, sizeof(desc)) == XFER_RESULT_SUCCESS) {
+        printf("[USB] dev %d: VID=%04x PID=%04x class=%d subclass=%d protocol=%d\n",
+            dev_addr, desc.idVendor, desc.idProduct,
+            desc.bDeviceClass, desc.bDeviceSubClass, desc.bDeviceProtocol);
+    } else {
+        printf("[USB] dev %d: mounted (descriptor read failed)\n", dev_addr);
+    }
 }
 
 void tuh_umount_cb(uint8_t dev_addr) {

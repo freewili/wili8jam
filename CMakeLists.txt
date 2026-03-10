@@ -99,8 +99,11 @@ add_executable(wili8jam
     usb-host/fwUSBHostHIDKeyboard.cpp
     usb-host/fwUSBHostHIDMouse.cpp
     usb-host/fwUSBHostHIDGeneric.cpp
+    usb-host/fwUSBHostHIDController.cpp
     usb-host/fwUSBHostCDC.cpp
     usb-host/fwUSBHostMSC.cpp
+    usb-host/fwUSBHostXInput.cpp
+    tusb_xinput/xinput_host.c
     # TinyUSB host stack (no native HCD — PIO-USB only)
     ${TINYUSB_PATH}/src/host/usbh.c
     ${TINYUSB_PATH}/src/host/hub.c
@@ -120,6 +123,7 @@ target_include_directories(wili8jam PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/usb-host
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/tusb_xinput
     ${LUA_SRC_DIR}
     ${TINYUSB_PATH}/src
 )
@@ -141,6 +145,10 @@ target_link_libraries(wili8jam PRIVATE
 # Increase stack size — default 0x800 (2KB) is too small for Lua + FatFS
 # Lua call chain can be deep; FIL structs now static to save stack space
 target_compile_definitions(wili8jam PRIVATE PICO_STACK_SIZE=0x1000)
+
+# TinyUSB debug level 2 — output goes to ring buffer, dumped via 'info' command
+# Must override SDK's default CFG_TUSB_DEBUG=0
+target_compile_definitions(wili8jam PRIVATE CFG_TUSB_DEBUG=2)
 
 # SDK's stdio_usb handles CDC serial (device descriptors, tud_task timer, etc.)
 pico_enable_stdio_usb(wili8jam 1)

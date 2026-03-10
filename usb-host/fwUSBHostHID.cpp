@@ -16,6 +16,7 @@ fwUSBHostHID::fwUSBHostHID() {
 void fwUSBHostHID::task() {
     m_obKeyboard.task();
     m_obMouse.task();
+    m_obController.task();
     m_obGeneric.task();
 }
 
@@ -35,7 +36,13 @@ void fwUSBHostHID::mount(uint8_t dev_addr, uint8_t instance, uint8_t const *desc
 
         case HID_ITF_PROTOCOL_NONE:
         default:
-            m_obGeneric.mount(dev_addr, instance, desc_report, desc_len);
+            if (fwUSBHostHIDController::isController(desc_report, desc_len)) {
+                printf("[HID] addr=%d inst=%d → Controller\n", dev_addr, instance);
+                m_obController.mount(dev_addr, instance, desc_report, desc_len);
+            } else {
+                printf("[HID] addr=%d inst=%d → Generic\n", dev_addr, instance);
+                m_obGeneric.mount(dev_addr, instance, desc_report, desc_len);
+            }
             break;
     }
 
@@ -56,6 +63,7 @@ void fwUSBHostHID::unmount(uint8_t dev_addr, uint8_t instance) {
 
         case HID_ITF_PROTOCOL_NONE:
         default:
+            m_obController.unmount(dev_addr, instance);
             m_obGeneric.unmount(dev_addr, instance);
             break;
     }
@@ -77,6 +85,7 @@ void fwUSBHostHID::report_received(uint8_t dev_addr, uint8_t instance, uint8_t c
 
         case HID_ITF_PROTOCOL_NONE:
         default:
+            m_obController.report_received(dev_addr, instance, report, len);
             m_obGeneric.report_received(dev_addr, instance, report, len);
             break;
     }

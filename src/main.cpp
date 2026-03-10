@@ -38,6 +38,53 @@ extern "C" int cdc_debug_printf(const char* fmt, ...) {
     return ret;
 }
 
+// TinyUSB debug ring buffer — captures debug output, dumped via 'info'
+static constexpr int TUSB_DBG_BUF_SIZE = 4096;
+static char tusb_dbg_buf[TUSB_DBG_BUF_SIZE];
+static int tusb_dbg_pos = 0;
+static bool tusb_dbg_wrapped = false;
+
+extern "C" int tusb_debug_buffered_printf(const char* fmt, ...) {
+    char tmp[256];
+    va_list args;
+    va_start(args, fmt);
+    int n = vsnprintf(tmp, sizeof(tmp), fmt, args);
+    va_end(args);
+    if (n <= 0) return n;
+    if (n > (int)sizeof(tmp) - 1) n = sizeof(tmp) - 1;
+    // Filter out device-side (USBD/CDC) noise — only keep host-side logs
+    if (strncmp(tmp, "USBD", 4) == 0 || strncmp(tmp, "  CDC", 5) == 0 ||
+        strncmp(tmp, "  Queue", 7) == 0)
+        return n;
+    for (int i = 0; i < n; i++) {
+        tusb_dbg_buf[tusb_dbg_pos] = tmp[i];
+        tusb_dbg_pos = (tusb_dbg_pos + 1) % TUSB_DBG_BUF_SIZE;
+        if (tusb_dbg_pos == 0) tusb_dbg_wrapped = true;
+    }
+    return n;
+}
+
+static void tusb_dbg_dump() {
+    if (!tusb_dbg_wrapped && tusb_dbg_pos == 0) {
+        printf("(no tusb debug output)\n");
+        return;
+    }
+    printf("--- tusb debug log ---\n");
+    if (tusb_dbg_wrapped) {
+        // Print from current position to end, then start to current position
+        fwrite(tusb_dbg_buf + tusb_dbg_pos, 1, TUSB_DBG_BUF_SIZE - tusb_dbg_pos, stdout);
+        fwrite(tusb_dbg_buf, 1, tusb_dbg_pos, stdout);
+    } else {
+        fwrite(tusb_dbg_buf, 1, tusb_dbg_pos, stdout);
+    }
+    printf("--- end tusb debug ---\n");
+}
+
+static void tusb_dbg_clear() {
+    tusb_dbg_pos = 0;
+    tusb_dbg_wrapped = false;
+}
+
 extern fwUSBHost obUSBHost;
 
 static tlsf_t psram_tlsf;
@@ -481,6 +528,42 @@ static int lua_info(lua_State *L) {
     const char *fmt = "wili8jam / fruit jam\nrp2350b @ %u mhz\npsram: %uk free / %uk\n";
     printf(fmt, mhz, fk, tk);
     p8_console_printf(fmt, mhz, fk, tk);
+
+    // USB HID device info
+    auto &hid = obUSBHost.m_obHID;
+    printf("usb: kbd=%d mouse=%d ctrl=%d xinput=%d generic=%d\n",
+        hid.getKeyboardCount(), hid.getMouseCount(),
+        hid.getControllerCount(), obUSBHost.m_obXInput.getMountedCount(),
+        hid.getGenericCount());
+    p8_console_printf("usb: kbd=%d mouse=%d ctrl=%d xinput=%d generic=%d\n",
+        hid.getKeyboardCount(), hid.getMouseCount(),
+        hid.getControllerCount(), obUSBHost.m_obXInput.getMountedCount(),
+        hid.getGenericCount());
+
+    // Show mounted HID interface details
+    for (uint8_t addr = 1; addr <= CFG_TUH_DEVICE_MAX; addr++) {
+        if (!tuh_mounted(addr)) continue;
+        uint8_t itf_count = tuh_hid_itf_get_count(addr);
+        for (uint8_t itf = 0; itf < itf_count; itf++) {
+            uint8_t proto = tuh_hid_interface_protocol(addr, itf);
+            printf("  dev %d itf %d: proto=%d (%s)\n", addr, itf, proto,
+                proto == 1 ? "keyboard" : proto == 2 ? "mouse" : "none/other");
+        }
+    }
+
+    // PIO-USB root port diagnostic
+    {
+        extern root_port_t pio_usb_root_port[];
+        root_port_t *root = &pio_usb_root_port[0];
+        printf("pio-usb: init=%d connected=%d fullspeed=%d suspended=%d event=%d\n",
+            root->initialized, root->connected, root->is_fullspeed,
+            root->suspended, root->event);
+    }
+
+    // Dump TinyUSB debug ring buffer
+    tusb_dbg_dump();
+    tusb_dbg_clear();
+
     p8_console_draw();
     gfx_flip();
     (void)L;
@@ -688,10 +771,29 @@ int main() {
         }
     });
 
-    // Register gamepad callback (generic HID → P2 buttons)
-    obUSBHost.m_obHID.getGeneric().setReportCallback(
+    // Register controller callback — player assigned by mount order
+    obUSBHost.m_obHID.getController().setReportCallback(
         [](uint8_t dev_addr, uint8_t instance, uint8_t const *report, uint16_t len) {
-            input_gamepad_report(report, len);
+            auto &ctrl = obUSBHost.m_obHID.getController();
+            int player = ctrl.getPlayerForDevice(dev_addr, instance);
+            if (player > 1) player = 1; // PICO-8 supports 2 players max
+            input_gamepad_report(report, len, player);
+        });
+
+    // NOTE: Generic HID devices are NOT routed to input_gamepad_report.
+    // Many keyboards expose a secondary HID interface (consumer control)
+    // with protocol=NONE that gets classified as "generic". Feeding those
+    // reports through the gamepad parser causes phantom directional input
+    // (e.g., constant left) because zero-filled reports are misinterpreted
+    // as axis values. Only properly-detected controllers (via isController)
+    // should produce gamepad input.
+
+    // Register XInput (Xbox) controller callback
+    obUSBHost.m_obXInput.setReportCallback(
+        [](uint8_t dev_addr, uint8_t instance, xinput_gamepad_t const *pad) {
+            int player = obUSBHost.m_obXInput.getPlayerForDevice(dev_addr, instance);
+            if (player > 1) player = 1;
+            input_xinput_update(pad->wButtons, pad->sThumbLX, pad->sThumbLY, player);
         });
 
     printf("\n");
@@ -763,6 +865,28 @@ int main() {
 
     // Init PICO-8 SFX/music engine (wavetables + pitch table)
     p8_sfx_init();
+
+    // Poll USB host to enumerate devices already plugged in at boot.
+    // Xbox One controllers need multiple round-trips for power-on + init handshake,
+    // and PIO-USB full-speed enumeration is slower than native USB.
+    // Poll for up to 3 seconds, exit early once a device is detected.
+    for (int i = 0; i < 300; i++) {
+        tuh_task();
+        sleep_ms(10);
+        // Exit early once any HID or XInput device is mounted
+        if (i > 50 && (obUSBHost.m_obHID.isKeyboardMounted() ||
+                       obUSBHost.m_obHID.isControllerMounted() ||
+                       obUSBHost.m_obXInput.isAnyMounted() ||
+                       obUSBHost.m_obHID.getGenericCount() > 0)) {
+            printf("[USB] Device detected after %d ms\n", i * 10);
+            break;
+        }
+    }
+    printf("[USB] Boot scan complete: kbd=%d ctrl=%d xinput=%d generic=%d\n",
+        obUSBHost.m_obHID.getKeyboardCount(),
+        obUSBHost.m_obHID.getControllerCount(),
+        obUSBHost.m_obXInput.getMountedCount(),
+        obUSBHost.m_obHID.getGenericCount());
 
     printf("Ready. Type Lua code, press Enter.\n");
     p8_console_print("ready.\n");

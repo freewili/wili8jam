@@ -11,11 +11,13 @@
 #include "fwUSBHostHIDKeyboard.h"
 #include "fwUSBHostHIDMouse.h"
 #include "fwUSBHostHIDGeneric.h"
+#include "fwUSBHostHIDController.h"
 
 class fwUSBHostHID {
 private:
     fwUSBHostHIDKeyboard m_obKeyboard;
     fwUSBHostHIDMouse m_obMouse;
+    fwUSBHostHIDController m_obController;
     fwUSBHostHIDGeneric m_obGeneric;
 
     uint8_t m_instanceProtocol[CFG_TUH_HID];
@@ -38,20 +40,24 @@ public:
     // State queries
     bool isKeyboardMounted() const { return m_obKeyboard.isAnyMounted(); }
     bool isMouseMounted() const    { return m_obMouse.isAnyMounted(); }
+    bool isControllerMounted() const { return m_obController.isAnyMounted(); }
     bool isGenericMounted() const  { return m_obGeneric.isAnyMounted(); }
-    
-    uint8_t getKeyboardCount() const { return m_obKeyboard.getMountedCount(); }
-    uint8_t getMouseCount() const    { return m_obMouse.getMountedCount(); }
-    uint8_t getGenericCount() const  { return m_obGeneric.getMountedCount(); }
+
+    uint8_t getKeyboardCount() const   { return m_obKeyboard.getMountedCount(); }
+    uint8_t getMouseCount() const      { return m_obMouse.getMountedCount(); }
+    uint8_t getControllerCount() const { return m_obController.getMountedCount(); }
+    uint8_t getGenericCount() const    { return m_obGeneric.getMountedCount(); }
 
     // Direct child access
-    fwUSBHostHIDKeyboard& getKeyboard() { return m_obKeyboard; }
-    fwUSBHostHIDMouse& getMouse()       { return m_obMouse; }
-    fwUSBHostHIDGeneric& getGeneric()   { return m_obGeneric; }
-    
-    const fwUSBHostHIDKeyboard& getKeyboard() const { return m_obKeyboard; }
-    const fwUSBHostHIDMouse& getMouse() const       { return m_obMouse; }
-    const fwUSBHostHIDGeneric& getGeneric() const   { return m_obGeneric; }
+    fwUSBHostHIDKeyboard& getKeyboard()       { return m_obKeyboard; }
+    fwUSBHostHIDMouse& getMouse()             { return m_obMouse; }
+    fwUSBHostHIDController& getController()   { return m_obController; }
+    fwUSBHostHIDGeneric& getGeneric()         { return m_obGeneric; }
+
+    const fwUSBHostHIDKeyboard& getKeyboard() const     { return m_obKeyboard; }
+    const fwUSBHostHIDMouse& getMouse() const           { return m_obMouse; }
+    const fwUSBHostHIDController& getController() const { return m_obController; }
+    const fwUSBHostHIDGeneric& getGeneric() const       { return m_obGeneric; }
 };
 
 #endif // FW_USB_HOST_HID_H_

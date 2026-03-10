@@ -23,13 +23,13 @@ static uint8_t btnp_hold[2][7]; // 7 buttons: 0-5 + menu(6)
 #define MAX_ALTS 3
 
 static const uint8_t p1_keys[7][MAX_ALTS] = {
-    { HID_KEY_ARROW_LEFT,  0, 0 },                 // btn 0: left
-    { HID_KEY_ARROW_RIGHT, 0, 0 },                 // btn 1: right
-    { HID_KEY_ARROW_UP,    0, 0 },                 // btn 2: up
-    { HID_KEY_ARROW_DOWN,  0, 0 },                 // btn 3: down
-    { HID_KEY_Z, HID_KEY_C, HID_KEY_N },           // btn 4: O
-    { HID_KEY_X, HID_KEY_V, HID_KEY_M },           // btn 5: X
-    { HID_KEY_P, HID_KEY_ENTER, HID_KEY_ESCAPE },  // btn 6: menu
+    { HID_KEY_ARROW_LEFT,  0xF0, 0 },              // btn 0: left (+ gamepad)
+    { HID_KEY_ARROW_RIGHT, 0xF1, 0 },              // btn 1: right (+ gamepad)
+    { HID_KEY_ARROW_UP,    0xF2, 0 },              // btn 2: up (+ gamepad)
+    { HID_KEY_ARROW_DOWN,  0xF3, 0 },              // btn 3: down (+ gamepad)
+    { HID_KEY_Z, HID_KEY_C, 0xF4 },                // btn 4: O (+ gamepad A)
+    { HID_KEY_X, HID_KEY_V, 0xF5 },                // btn 5: X (+ gamepad B)
+    { HID_KEY_P, HID_KEY_ENTER, 0xF6 },              // btn 6: menu (+ gamepad start)
 };
 
 static const uint8_t p2_keys[7][MAX_ALTS] = {
@@ -219,34 +219,44 @@ bool input_key(uint8_t keycode) {
 }
 
 // --- Gamepad state ---
-// Gamepad maps to P2 buttons via key_state bitfield (reuses P2 keycodes)
-// We pick unused HID keycodes (0xE8-0xEF) as virtual gamepad keys
-#define VKEY_GP_LEFT  0xE8
-#define VKEY_GP_RIGHT 0xE9
-#define VKEY_GP_UP    0xEA
-#define VKEY_GP_DOWN  0xEB
-#define VKEY_GP_O     0xEC  // btn 4 (face button 1 / A / South)
-#define VKEY_GP_X     0xED  // btn 5 (face button 2 / B / East)
+// Virtual gamepad keys per player, stored in unused HID keycode space
+// Player 1 (0xF0-0xF5), Player 2 (0xE8-0xED)
+#define VKEY_GP1_LEFT  0xF0
+#define VKEY_GP1_RIGHT 0xF1
+#define VKEY_GP1_UP    0xF2
+#define VKEY_GP1_DOWN  0xF3
+#define VKEY_GP1_O     0xF4  // btn 4 (face button 1 / A / South)
+#define VKEY_GP1_X     0xF5  // btn 5 (face button 2 / B / East)
+#define VKEY_GP1_MENU  0xF6  // btn 6 (start/menu, P1 only)
 
-void input_gamepad_report(const uint8_t *report, uint16_t len) {
+#define VKEY_GP2_LEFT  0xE8
+#define VKEY_GP2_RIGHT 0xE9
+#define VKEY_GP2_UP    0xEA
+#define VKEY_GP2_DOWN  0xEB
+#define VKEY_GP2_O     0xEC  // btn 4 (face button 1 / A / South)
+#define VKEY_GP2_X     0xED  // btn 5 (face button 2 / B / East)
+
+// Virtual keycodes indexed by player: [player][button]
+// btn order: left, right, up, down, O, X, menu
+static const uint8_t gamepad_vkeys[2][7] = {
+    { VKEY_GP1_LEFT, VKEY_GP1_RIGHT, VKEY_GP1_UP, VKEY_GP1_DOWN, VKEY_GP1_O, VKEY_GP1_X, VKEY_GP1_MENU },
+    { VKEY_GP2_LEFT, VKEY_GP2_RIGHT, VKEY_GP2_UP, VKEY_GP2_DOWN, VKEY_GP2_O, VKEY_GP2_X, 0 },
+};
+
+void input_gamepad_report(const uint8_t *report, uint16_t len, int player) {
     if (len < 3) return;
+    if (player < 0 || player > 1) return;
 
-    // Common gamepad HID report layout heuristic:
-    // Byte 0: X axis (0-255, center ~128)
-    // Byte 1: Y axis (0-255, center ~128)
-    // Byte 2+: buttons bitmask
-    // Some gamepads have a report ID as byte 0 — detect by checking if
-    // byte 0 looks like a small report ID (< 16) and byte 1+2 are axis-like
-    int axis_off = 0;
-    if (len >= 4 && report[0] < 16 && report[1] >= 64 && report[1] <= 192) {
-        axis_off = 1; // skip report ID
-    }
+    const uint8_t *vk = gamepad_vkeys[player];
 
-    if ((int)len < axis_off + 3) return;
+    // Most controllers send: [buttons_lo, buttons_hi, x_axis, y_axis, ...]
+    // Match the format assumed by fwUSBHostHIDController::processReport.
+    // Bytes 0-1 are button bitmask, bytes 2+ are axes (uint8, center ~128).
+    if (len < 4) return;
 
-    uint8_t x_axis = report[axis_off];
-    uint8_t y_axis = report[axis_off + 1];
-    uint8_t buttons = report[axis_off + 2];
+    uint8_t x_axis = report[2];
+    uint8_t y_axis = report[3];
+    uint16_t buttons_word = report[0] | ((uint16_t)report[1] << 8);
 
     // D-pad from axis values (dead zone: 64-192 = center)
     bool left  = (x_axis < 64);
@@ -254,32 +264,72 @@ void input_gamepad_report(const uint8_t *report, uint16_t len) {
     bool up    = (y_axis < 64);
     bool down  = (y_axis > 192);
 
-    // Also check hat switch if present in buttons byte
-    // Some gamepads encode d-pad as hat: lower nibble of buttons byte
+    // Also check hat switch if present in low nibble of buttons word
     // Hat: 0=N, 1=NE, 2=E, 3=SE, 4=S, 5=SW, 6=W, 7=NW, 8/15=center
-    if (!left && !right && !up && !down && (buttons & 0x0F) <= 8) {
-        uint8_t hat = buttons & 0x0F;
+    uint8_t face_buttons = 0;
+    if (!left && !right && !up && !down && (buttons_word & 0x0F) <= 8) {
+        uint8_t hat = buttons_word & 0x0F;
         if (hat == 0 || hat == 1 || hat == 7) up = true;
         if (hat == 4 || hat == 3 || hat == 5) down = true;
         if (hat == 6 || hat == 5 || hat == 7) left = true;
         if (hat == 2 || hat == 1 || hat == 3) right = true;
-        // Use upper nibble or next byte for face buttons
-        if (axis_off + 3 < (int)len) {
-            buttons = report[axis_off + 3]; // face buttons in next byte
-        } else {
-            buttons >>= 4; // face buttons in upper nibble
-        }
+        face_buttons = (uint8_t)(buttons_word >> 4);
+    } else {
+        face_buttons = (uint8_t)buttons_word;
     }
 
     // Update virtual gamepad keys in key_state
-    if (left)  key_set(key_state, VKEY_GP_LEFT);  else key_clear(key_state, VKEY_GP_LEFT);
-    if (right) key_set(key_state, VKEY_GP_RIGHT); else key_clear(key_state, VKEY_GP_RIGHT);
-    if (up)    key_set(key_state, VKEY_GP_UP);    else key_clear(key_state, VKEY_GP_UP);
-    if (down)  key_set(key_state, VKEY_GP_DOWN);  else key_clear(key_state, VKEY_GP_DOWN);
+    if (left)  key_set(key_state, vk[0]);  else key_clear(key_state, vk[0]);
+    if (right) key_set(key_state, vk[1]);  else key_clear(key_state, vk[1]);
+    if (up)    key_set(key_state, vk[2]);  else key_clear(key_state, vk[2]);
+    if (down)  key_set(key_state, vk[3]);  else key_clear(key_state, vk[3]);
 
     // Face buttons: bit 0 = A/South → O, bit 1 = B/East → X
-    if (buttons & 0x01) key_set(key_state, VKEY_GP_O); else key_clear(key_state, VKEY_GP_O);
-    if (buttons & 0x02) key_set(key_state, VKEY_GP_X); else key_clear(key_state, VKEY_GP_X);
+    if (face_buttons & 0x01) key_set(key_state, vk[4]); else key_clear(key_state, vk[4]);
+    if (face_buttons & 0x02) key_set(key_state, vk[5]); else key_clear(key_state, vk[5]);
+}
+
+// XInput defines (must match xinput_host.h)
+#define XINPUT_GAMEPAD_DPAD_UP    0x0001
+#define XINPUT_GAMEPAD_DPAD_DOWN  0x0002
+#define XINPUT_GAMEPAD_DPAD_LEFT  0x0004
+#define XINPUT_GAMEPAD_DPAD_RIGHT 0x0008
+#define XINPUT_GAMEPAD_START       0x0010
+#define XINPUT_GAMEPAD_A          0x1000
+#define XINPUT_GAMEPAD_B          0x2000
+
+#define XINPUT_STICK_DEADZONE 8000
+
+void input_xinput_update(uint16_t wButtons, int16_t stickLX, int16_t stickLY, int player) {
+    if (player < 0 || player > 1) return;
+
+    const uint8_t *vk = gamepad_vkeys[player];
+
+    // D-pad buttons
+    bool left  = (wButtons & XINPUT_GAMEPAD_DPAD_LEFT);
+    bool right = (wButtons & XINPUT_GAMEPAD_DPAD_RIGHT);
+    bool up    = (wButtons & XINPUT_GAMEPAD_DPAD_UP);
+    bool down  = (wButtons & XINPUT_GAMEPAD_DPAD_DOWN);
+
+    // Left stick as additional d-pad input (with dead zone)
+    if (stickLX < -XINPUT_STICK_DEADZONE) left = true;
+    if (stickLX >  XINPUT_STICK_DEADZONE) right = true;
+    if (stickLY >  XINPUT_STICK_DEADZONE) up = true;
+    if (stickLY < -XINPUT_STICK_DEADZONE) down = true;
+
+    if (left)  key_set(key_state, vk[0]);  else key_clear(key_state, vk[0]);
+    if (right) key_set(key_state, vk[1]);  else key_clear(key_state, vk[1]);
+    if (up)    key_set(key_state, vk[2]);  else key_clear(key_state, vk[2]);
+    if (down)  key_set(key_state, vk[3]);  else key_clear(key_state, vk[3]);
+
+    // A → O (btn 4), B → X (btn 5)
+    if (wButtons & XINPUT_GAMEPAD_A) key_set(key_state, vk[4]); else key_clear(key_state, vk[4]);
+    if (wButtons & XINPUT_GAMEPAD_B) key_set(key_state, vk[5]); else key_clear(key_state, vk[5]);
+
+    // Start → menu (btn 6, P1 only)
+    if (vk[6]) {
+        if (wButtons & XINPUT_GAMEPAD_START) key_set(key_state, vk[6]); else key_clear(key_state, vk[6]);
+    }
 }
 
 // --- Lua bindings ---

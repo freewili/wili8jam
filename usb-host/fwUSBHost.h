@@ -9,6 +9,7 @@
 #include "fwUSBHostMSC.h"
 #include "fwUSBHostCDC.h"
 #include "fwUSBHostHID.h"
+#include "fwUSBHostXInput.h"
 
 class fwUSBHost {
 public:
@@ -27,12 +28,14 @@ public:
     fwUSBHostMSC m_obMSC;
     fwUSBHostCDC m_obCDC;
     fwUSBHostHID m_obHID;
+    fwUSBHostXInput m_obXInput;
 
     // Convenience accessors
     bool isKeyboardConnected() { return m_obHID.isKeyboardMounted(); }
     bool isMouseConnected()    { return m_obHID.isMouseMounted(); }
     bool isMSCConnected()      { return m_obMSC.getMountedCount() > 0; }
     bool isCDCConnected()      { return m_obCDC.getMountedCount() > 0; }
+    bool isXInputConnected()   { return m_obXInput.isAnyMounted(); }
 };
 
 #endif // FW_USB_HOST_H_

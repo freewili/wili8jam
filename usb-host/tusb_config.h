@@ -11,6 +11,16 @@
 #ifndef _PICO_STDIO_USB_TUSB_CONFIG_H
 #define _PICO_STDIO_USB_TUSB_CONFIG_H
 
+/* ---- TinyUSB debug logging → ring buffer, shown via info command ---- */
+#ifdef __cplusplus
+extern "C" {
+#endif
+extern int tusb_debug_buffered_printf(const char *fmt, ...);
+#ifdef __cplusplus
+}
+#endif
+#define CFG_TUSB_DEBUG_PRINTF   tusb_debug_buffered_printf
+
 /* ---- Device side: identical to SDK's pico_stdio_usb/include/tusb_config.h ---- */
 
 #include "pico/stdio_usb.h"
@@ -59,6 +69,7 @@
 #define CFG_TUH_HID                 4
 #define CFG_TUH_MSC                 1
 #define CFG_TUH_VENDOR              0
+#define CFG_TUH_XINPUT              4
 #define CFG_TUH_DEVICE_MAX          4
 
 #define CFG_TUH_HID_EPIN_BUFSIZE    64
