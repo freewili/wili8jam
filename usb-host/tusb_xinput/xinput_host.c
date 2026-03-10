@@ -244,7 +244,7 @@ bool tuh_xinput_set_rumble(uint8_t dev_addr, uint8_t instance, uint8_t lValue, u
     {
         wait_for_tx_complete(dev_addr, xid_itf->ep_out);
     }
-    return true;
+    return ret;
 }
 
 //--------------------------------------------------------------------+
