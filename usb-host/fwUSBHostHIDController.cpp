@@ -75,11 +75,6 @@ void fwUSBHostHIDController::report_received(uint8_t dev_addr, uint8_t instance,
     int slot = findInstance(dev_addr, instance);
     if (slot < 0) return;
 
-    // Debug: print first few bytes of report
-    printf("[Controller] report addr=%d inst=%d len=%d:", dev_addr, instance, len);
-    for (int i = 0; i < len && i < 8; i++) printf(" %02x", report[i]);
-    printf("\n");
-
     if (m_reportCallback) {
         m_reportCallback(dev_addr, instance, report, len);
     }
